@@ -1,0 +1,24 @@
+services:
+  manager-site:
+    build: .
+    image: imas-manager-site:latest
+    container_name: imas-manager-site
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Almaty
+      - PORT=8080
+    ports:
+      # Наружу слушает только localhost: ставьте перед сайтом nginx/Caddy с HTTPS.
+      # Если нужен прямой доступ по IP — замените на "8080:8080".
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # Настройки, сессии, токен amoCRM и SQLite — переживают пересборку контейнера
+      - manager-data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  manager-data:

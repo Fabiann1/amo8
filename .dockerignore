@@ -1,0 +1,15 @@
+venv/
+.venv/
+data/
+n8n/
+.claude/
+.git/
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+start.bat
+Dockerfile
+docker-compose.yml
+.dockerignore
+.env
