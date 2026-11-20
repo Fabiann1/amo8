@@ -37,7 +37,14 @@ async def meta(force: bool = False) -> dict:
     if not force and _meta_cache["data"] and _meta_cache["key"] == key and time.time() - _meta_cache["at"] < 300:
         return _meta_cache["data"]
     a = amocrm.client()
-    acc = await a.request("GET", "/api/v4/account", {"with": "users"})
+    try:
+        acc = await a.request("GET", "/api/v4/account", {"with": "users"})
+    except AmoError as e:
+        # Часть аккаунтов amoCRM не принимает with=users у /account (400 "Invalid with") — тогда без него,
+        # а пользователи ниже берутся из /api/v4/users
+        if e.status != 400:
+            raise
+        acc = await a.request("GET", "/api/v4/account")
     users = emb(acc, "users")
     if not users:
         try:
