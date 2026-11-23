@@ -39,10 +39,12 @@ DEFAULT_CONFIG: dict = {
     },
     "n8n": {
         "console_url": "",      # ссылка на форму «Manager console» в n8n (ИИ-помощник)
+        "console_user": "",     # логин Basic Auth формы (если включён в n8n)
+        "console_password": "", # пароль Basic Auth формы
     },
 }
 
-SECRET_KEYS = {("amo", "long_token"), ("amo", "client_secret"), ("amo", "access_token"), ("amo", "refresh_token")}
+SECRET_KEYS = {("amo", "long_token"), ("amo", "client_secret"), ("amo", "access_token"), ("amo", "refresh_token"), ("n8n", "console_password")}
 
 _lock = threading.RLock()
 _cfg: dict | None = None

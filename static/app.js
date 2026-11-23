@@ -534,7 +534,7 @@ function composerHtml(L) {
     <div class="tabs"><button class="on" data-tab="chat">${I.chat}Сообщение клиенту</button><button data-tab="note">${I.note}Примечание</button><button data-tab="task">${I.clock}Задача</button><span class="grow"></span>
       <span class="hint">${L.ai_mode === 'auto' ? 'После вашего ответа ИИ уступит диалог на ' + (S.settings?.crm?.takeover_minutes || 60) + ' мин' : ''}</span></div>
     <div data-pane="chat"><textarea class="input" id="msg" placeholder="Напишите сообщение клиенту…"></textarea>
-      <div class="bar2">${n8n ? `<a class="btn soft" href="${esc(n8n)}" target="_blank" rel="noopener" title="Консоль менеджера в n8n: ИИ улучшит текст или напишет по инструкции">${I.spark}ИИ-помощник (n8n)</a>` : ''}
+      <div class="bar2">${n8n ? `<button class="btn soft" id="aiHelp" title="ИИ улучшит ваш текст или напишет сообщение по инструкции">${I.spark}ИИ-помощник</button>` : ''}
         <span class="grow"></span>
         ${st.send ? '<span class="hint">Ctrl + Enter — отправить</span>' : `<span class="hint" style="color:var(--amber)">Отправка не настроена · <a href="#/settings/sending">настроить</a></span>`}
         <button class="btn primary" id="send">${I.send}Отправить</button></div></div>
@@ -565,6 +565,7 @@ function bindLeadUI(root, L, reload) {
     await reload();
   });
   sendBtn.onclick = send;
+  if ($('#aiHelp', root)) $('#aiHelp', root).onclick = () => aiAssistant(L, msg, reload);
   msg.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } };
   $('#saveNote', root).onclick = (e) => busy(e.currentTarget, async () => {
     await api(`leads/${L.id}/note`, { body: { text: $('#note', root).value } });
@@ -588,6 +589,60 @@ function bindLeadUI(root, L, reload) {
     msg.value = n.text.replace(/^💡[^\n]*\n/, ''); msg.oninput();
     $('.composer [data-tab=chat]', root).click(); msg.focus();
   });
+}
+
+function contactInfoHtml(L) {
+  const cs = L.contacts || [];
+  if (!cs.length) return empty(I.user, 'Контакт не привязан', '<p class="small">Привяжите контакт к сделке в amoCRM — здесь появятся телефон, почта и другие данные.</p>');
+  const row = (icon, label, val, href) => `<div class="ci-row"><span class="ci-ico">${icon}</span><div class="ci-v"><small>${label}</small>${href ? `<a href="${esc(href)}">${esc(val)}</a>` : `<span>${esc(val)}</span>`}</div><button class="btn sm icon" data-copy="${esc(val)}" title="Копировать">${I.copy}</button></div>`;
+  return cs.map((c) => `<div class="ci-card">
+    <div class="ci-head"><span class="av lg">${esc(initials(c.name))}</span><div style="flex:1;min-width:0"><b>${esc(c.name || 'Без имени')}</b>
+      <div class="small muted">Контакт #${c.id}${c.companies?.length ? ' · ' + esc(c.companies.join(', ')) : ''}</div></div>
+      ${S.meta?.link ? `<a class="btn sm" href="${esc(S.meta.link)}/contacts/detail/${c.id}" target="_blank" rel="noopener">${I.ext}В amoCRM</a>` : ''}</div>
+    ${c.phones.map((p) => row(I.phone, 'Телефон', p, 'tel:' + p)).join('')}
+    ${c.emails.map((e) => row(I.mail, 'Почта', e, 'mailto:' + e)).join('')}
+    ${(c.fields || []).map((f) => row(I.info, esc(f.name), f.value)).join('')}
+    ${!c.phones.length && !c.emails.length && !(c.fields || []).length ? '<div class="dim small" style="padding:8px 0">Телефон и почта не указаны</div>' : ''}
+    <div class="kv" style="margin-top:12px">
+      ${userName(c.responsible_user_id) ? `<span class="k">Ответственный</span><span class="v">${esc(userName(c.responsible_user_id))}</span>` : ''}
+      ${c.created_at ? `<span class="k">Создан</span><span class="v">${fmtTime(c.created_at)}</span>` : ''}
+      ${c.tags?.length ? `<span class="k">Теги</span><span class="v">${c.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join('')}</span>` : ''}
+    </div></div>`).join('');
+}
+
+const AI_ACTIONS = [
+  { k: 'polish', t: 'Улучшить мой текст', d: 'ИИ поправит и переведёт на язык клиента, затем отправит', ph: 'Ваш черновик сообщения клиенту' },
+  { k: 'write_send', t: 'Написать и отправить', d: 'ИИ напишет сообщение по вашей инструкции и сразу отправит', ph: 'Например: напомни про демо, предложи четверг 15:00' },
+  { k: 'write_draft', t: 'Только черновик', d: 'ИИ напишет сообщение и сохранит его в чат как черновик, без отправки', ph: 'Например: ответь на вопрос о цене, мягко' },
+  { k: 'send', t: 'Отправить как есть', d: 'Текст уйдёт клиенту без изменений', ph: 'Сообщение клиенту' },
+];
+
+function aiAssistant(L, msg, reload) {
+  let act = msg.value.trim() ? 'polish' : 'write_send';
+  const body = `<div class="ai-lead">${I.funnel}<span>Сделка <b>#${L.id}</b>${L.name && !String(L.name).includes(String(L.id)) ? ' · ' + esc(L.name) : ''}</span></div>
+    <div class="ai-acts">${AI_ACTIONS.map((a) => `<button type="button" class="ai-act" data-act="${a.k}"><b>${a.t}</b><small>${a.d}</small></button>`).join('')}</div>
+    <label class="field"><span id="aiLbl">Текст</span><textarea class="input" name="aiText" style="min-height:96px">${esc(msg.value)}</textarea>
+      <small>Ctrl + Enter — выполнить</small></label>`;
+  const root = modal('ИИ-помощник', body, {
+    okText: 'Выполнить', icon: I.spark, onOk: async (r) => {
+      const text = $('[name=aiText]', r).value;
+      await api(`leads/${L.id}/assistant`, { body: { action: act, text } });
+      if (act !== 'write_draft' && msg.value.trim()) { msg.value = ''; msg.oninput(); }
+      toast(act === 'write_draft' ? 'Черновик появится в чате через несколько секунд' : 'n8n отправит сообщение клиенту через несколько секунд', 'ok');
+      setTimeout(() => reload(), 5000);
+    },
+  });
+  const ta = $('[name=aiText]', root);
+  const sync = () => {
+    const a = AI_ACTIONS.find((x) => x.k === act);
+    $$('[data-act]', root).forEach((b) => b.classList.toggle('on', b.dataset.act === act));
+    $('#aiLbl', root).textContent = act.startsWith('write') ? 'Инструкция для ИИ' : 'Текст сообщения';
+    ta.placeholder = a.ph;
+  };
+  $$('[data-act]', root).forEach((b) => b.onclick = () => { act = b.dataset.act; sync(); ta.focus(); });
+  ta.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('[data-ok]', root).click(); } };
+  sync();
+  setTimeout(() => ta.focus(), 40);
 }
 
 function completeTask(id, after) {
@@ -705,6 +760,7 @@ async function viewChats(id) {
   $$('[data-f]').forEach((b) => b.onclick = () => { S.chatFilter = b.dataset.f; $$('[data-f]').forEach((x) => x.classList.toggle('on', x === b)); paintList(); });
   if (!id) { await loadList(); every(15000, loadList); return; }
   let L;
+  let chatTab = 'chat';
   const pane = $('#cpane');
   const load = async () => { L = await api('leads/' + id); paintPane(); };
   const paintPane = () => {
@@ -716,9 +772,18 @@ async function viewChats(id) {
         <div style="min-width:0;flex:1"><a href="#/lead/${L.id}" style="font-size:16px;font-weight:750;color:var(--navy)">${esc(L.contact?.name || L.name)}</a>
         <div class="small muted">${esc(L.name)}${st ? ` · <span class="dot" style="background:${esc(st.color || CH.cyan)}"></span> ${esc(st.name)}` : ''}${L.price ? ' · ' + money(L.price) : ''}</div></div>
         <div style="width:300px">${modeSeg(L)}</div><a class="btn sm" href="#/lead/${L.id}">${I.ext}Сделка</a></div>
-      <div class="feed">${feedHtml(L)}</div>${composerHtml(L)}`;
+      <div class="ctabs"><button data-ct="chat" class="${chatTab === 'chat' ? 'on' : ''}">${I.chat}Переписка</button><button data-ct="contact" class="${chatTab === 'contact' ? 'on' : ''}">${I.user}Контакт</button></div>
+      <div class="cbody" data-cb="chat" style="${chatTab === 'chat' ? '' : 'display:none'}"><div class="feed">${feedHtml(L)}</div>${composerHtml(L)}</div>
+      <div class="cbody cinfo" data-cb="contact" style="${chatTab === 'contact' ? '' : 'display:none'}">${contactInfoHtml(L)}</div>`;
     if (keep) $('#msg', pane).value = keep;
     const f = $('.feed', pane); if (atBottom) f.scrollTop = f.scrollHeight;
+    $$('[data-ct]', pane).forEach((b) => b.onclick = () => {
+      chatTab = b.dataset.ct;
+      $$('[data-ct]', pane).forEach((x) => x.classList.toggle('on', x === b));
+      $$('[data-cb]', pane).forEach((x) => x.style.display = x.dataset.cb === chatTab ? '' : 'none');
+      if (chatTab === 'chat') { const fe2 = $('.feed', pane); fe2.scrollTop = fe2.scrollHeight; }
+    });
+    bindCopy(pane);
     bindLeadUI(pane, L, load);
     bindAiPanel(pane, L, load);
   };
@@ -897,7 +962,8 @@ function setSending(root) {
   + block(I.tag, 'Теги ИИ', 'Должны совпадать с <span class="mono">tags</span> в узле CRM Config в n8n. По ним сайт показывает и переключает режим ИИ и температуру лида.',
     `<div class="grid2">${[['stop', 'ИИ выключен'], ['draft', 'Только подсказки'], ['human', 'Нужен менеджер'], ['hot', 'Горячий'], ['warm', 'Тёплый'], ['cold', 'Холодный'], ['gov', 'Госсектор'], ['biz', 'Бизнес']].map(([k, l]) => inp('crm.tags.' + k, l)).join('')}</div>`, 'amber')
   + block(I.spark, 'ИИ-помощник менеджера (n8n)', 'Ссылка на форму «Manager console» в n8n. В чате появится кнопка «ИИ-помощник (n8n)».',
-    inp('n8n.console_url', 'Ссылка на консоль менеджера', { ph: 'https://ваш-n8n/form/imas-manager-console' }));
+    inp('n8n.console_url', 'Ссылка на консоль менеджера', { ph: 'https://ваш-n8n/form/imas-manager-console' })
+    + `<div class="grid2">${inp('n8n.console_user', 'Логин формы', { help: 'Если в форме n8n включён Basic Auth' })}${inp('n8n.console_password', 'Пароль формы', { type: 'password' })}</div>`);
   saveBar(root);
 }
 

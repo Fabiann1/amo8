@@ -34,6 +34,11 @@ class Text(BaseModel):
     text: str = ""
 
 
+class Assistant(BaseModel):
+    action: str
+    text: str = ""
+
+
 class AiMode(BaseModel):
     mode: Literal["auto", "copilot", "off"]
 

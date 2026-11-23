@@ -97,14 +97,21 @@ async def leads_by_ids(ids) -> dict:
 
 
 def contact_view(c: dict) -> dict:
-    phones, emails = [], []
+    phones, emails, fields = [], [], []
     for f in c.get("custom_fields_values") or []:
         vals = [v.get("value") for v in f.get("values") or []]
         if f.get("field_code") == "PHONE":
             phones += vals
         elif f.get("field_code") == "EMAIL":
             emails += vals
-    return {"id": c["id"], "name": c.get("name"), "phones": phones, "emails": emails}
+        elif vals:
+            fields.append({"name": f.get("field_name") or f"Поле {f.get('field_id')}",
+                           "value": ", ".join(str(x) for x in vals if x not in (None, ""))})
+    companies = [x.get("name") for x in ((c.get("_embedded") or {}).get("companies") or []) if x.get("name")]
+    return {"id": c["id"], "name": c.get("name"), "phones": phones, "emails": emails,
+            "fields": [f for f in fields if f["value"]], "companies": companies,
+            "tags": [t.get("name") for t in ((c.get("_embedded") or {}).get("tags") or []) if t.get("name")],
+            "responsible_user_id": c.get("responsible_user_id"), "created_at": c.get("created_at")}
 
 
 def main_contact_id(lead: dict):
@@ -204,6 +211,48 @@ async def add_note(lead_id: int, text: str) -> None:
 
 def can_send(cfg: dict) -> bool:
     return bool(int(cfg["crm"].get("salesbot_id") or 0) and int(cfg["crm"].get("reply_field_id") or 0))
+
+
+# Действия ИИ-помощника → варианты выпадающего списка «Action» формы «Manager console» в n8n (должны совпадать дословно)
+ASSISTANT_ACTIONS = {
+    "send": "✉️ Send my text as is",
+    "polish": "✨ AI: polish my text (and translate to client's language), then send",
+    "write_send": "🤖 AI: write a message from my instruction and send it",
+    "write_draft": "📝 AI: write a message from my instruction, save as a draft note only",
+    "pause": "⏸ Turn the AI off for this lead (tag AI_STOP)",
+    "copilot": "💡 Copilot: AI only suggests drafts (tag AI_DRAFT)",
+    "resume": "▶️ Turn the AI back on",
+}
+ASSISTANT_NEEDS_TEXT = {"send", "polish", "write_send", "write_draft"}
+
+
+async def n8n_assistant(lead_id: int, action: str, text: str) -> None:
+    """Отправляет форму «Manager console» в n8n от имени менеджера (поля: сделка, действие, текст)."""
+    cfg = config.get_config()
+    n = cfg["n8n"]
+    url = (n.get("console_url") or "").strip()
+    if not url:
+        raise ValueError("ИИ-помощник не настроен: укажите ссылку на форму n8n в Настройках → Отправка и теги")
+    if action not in ASSISTANT_ACTIONS:
+        raise ValueError("Неизвестное действие ИИ-помощника")
+    text = (text or "").strip()
+    if action in ASSISTANT_NEEDS_TEXT and not text:
+        raise ValueError("Напишите текст или инструкцию для ИИ")
+    if cfg.get("demo"):
+        raise ValueError("В демо-режиме ИИ-помощник n8n недоступен — подключите свой аккаунт amoCRM")
+    auth = (n["console_user"], n["console_password"]) if n.get("console_user") else None
+    # Форма n8n принимает multipart с полями field-0, field-1, field-2 — в порядке полей формы
+    files = {"field-0": (None, str(lead_id)), "field-1": (None, ASSISTANT_ACTIONS[action]), "field-2": (None, text)}
+    try:
+        r = await amocrm.http().post(url, files=files, auth=auth, timeout=120)
+    except Exception as e:
+        raise ValueError(f"Нет связи с n8n: {e}")
+    if r.status_code == 401:
+        raise ValueError("n8n отклонил логин или пароль формы — проверьте их в Настройках → Отправка и теги")
+    if r.status_code == 404:
+        raise ValueError("Форма n8n не найдена: проверьте ссылку и что воркфлоу активирован")
+    if r.status_code >= 400:
+        raise ValueError(f"n8n вернул {r.status_code}: {r.text[:300]}")
 
 
 async def send_message(lead_id: int, text: str) -> None:

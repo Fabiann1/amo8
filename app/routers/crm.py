@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 
 from .. import services
 from ..auth import require_user
-from ..schemas import AiMode, LeadCreate, LeadPatch, TaskComplete, TaskCreate, Text
+from ..schemas import AiMode, Assistant, LeadCreate, LeadPatch, TaskComplete, TaskCreate, Text
 
 router = APIRouter(prefix="/api", tags=["CRM"], dependencies=[Depends(require_user)])
 
@@ -44,6 +44,12 @@ async def note(lead_id: int, body: Text):
 @router.post("/leads/{lead_id}/send")
 async def send(lead_id: int, body: Text):
     await services.send_message(lead_id, body.text)
+    return {"ok": True}
+
+
+@router.post("/leads/{lead_id}/assistant")
+async def assistant(lead_id: int, body: Assistant):
+    await services.n8n_assistant(lead_id, body.action, body.text)
     return {"ok": True}
 
 
